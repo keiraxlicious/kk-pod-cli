@@ -370,8 +370,8 @@ cmd_attach() {
     pod=$(kubectl get pods -n "$ns" -l "app=${deploy}" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [[ -z "$pod" ]] && die "${deploy} is not running."
     info "Attaching to ${deploy} (${pod})..."
-    # Land in /home/kk with PATH set — safe mount target that won't break the container
-    kubectl exec -it -n "$ns" "$pod" -- bash -c 'export PATH="$HOME/.local/bin:/home/kk/.local/bin:$PATH"; mkdir -p /home/kk; cd /home/kk && exec bash' 2>/dev/null || \
+    # Land in $HOME with PATH set — resolves to the container user's actual home
+    kubectl exec -it -n "$ns" "$pod" -- bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd "$HOME" && exec bash' 2>/dev/null || \
         kubectl exec -it -n "$ns" "$pod" -- /bin/sh
 }
 
