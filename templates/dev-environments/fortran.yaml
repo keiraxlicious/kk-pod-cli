@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fortran-dev
+  namespace: kk-dev
+  labels:
+    app: fortran-dev
+    tier: dev-environment
+    lang: fortran
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fortran-dev
+  template:
+    metadata:
+      labels:
+        app: fortran-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: fortran
+          image: gcc:14
+          command: ["sleep", "infinity"]
+          env:
+            - name: FC
+              value: "gfortran"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fortran-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: fortran-dev
+  ports:
+    - name: dummy
+      port: 9999
+      targetPort: 9999

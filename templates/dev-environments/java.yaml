@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-dev
+  namespace: kk-dev
+  labels:
+    app: java-dev
+    tier: dev-environment
+    lang: java
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-dev
+  template:
+    metadata:
+      labels:
+        app: java-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: java
+          image: eclipse-temurin:21-jdk
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: java-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: java-dev
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: debug
+      port: 5005
+      targetPort: 5005

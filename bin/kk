@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+# KiraKota CLI (kk) - Dynamic command alias manager
+# Usage: kk <alias> [args...]  |  kk add <alias> <cmd> [args...]  |  kk list
+
+set -euo pipefail
+
+KK_VERSION="1.1.0"
+KK_CONFIG_DIR="${HOME}/.config/kk"
+KK_ALIASES_DIR="${KK_CONFIG_DIR}/aliases"
+
+mkdir -p "$KK_ALIASES_DIR" || { echo "error: cannot create $KK_ALIASES_DIR" >&2; exit 1; }
+
+# --- Colors (auto-detect terminal support) ---
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    CYAN='\033[0;36m'; DIM='\033[2m'; BOLD='\033[1m'; NC='\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; CYAN=''; DIM=''; BOLD=''; NC=''
+fi
+
+die()  { echo -e "${RED}error:${NC} $*" >&2; exit 1; }
+info() { echo -e "${GREEN}$*${NC}"; }
+warn() { echo -e "${YELLOW}$*${NC}"; }
+
+# Reserved kk subcommands - aliases cannot use these names
+RESERVED_NAMES="add rm remove del list ls show info args flags help edit version link unlink links"
+
+# --- Path handling ---
+normalize_path() {
+    local p="$1"
+    # Absolute Windows path: C:\...
+    if [[ "$p" =~ ^[A-Za-z]:\\ ]] || [[ "$p" =~ ^[A-Za-z]:/ ]]; then
+        local drive="${p:0:1}"
+        drive=$(echo "$drive" | tr '[:upper:]' '[:lower:]')
+        p="/${drive}${p:2}"
+        p="${p//\\//}"
+    # Relative Windows path: .\... or ..\...
+    elif [[ "$p" =~ ^\.\\ ]] || [[ "$p" =~ ^\.\.\\ ]]; then
+        p="${p//\\//}"
+    # UNC path: \\server\share
+    elif [[ "$p" =~ ^\\\\ ]]; then
+        p="${p//\\//}"
+    fi
+    echo "$p"
+}
+
+# --- Alias file format (v2) ---
+# Each alias is a file in $KK_ALIASES_DIR/<name>
+# Format:
+#   CMD=<executable path>
+#   ARG=<individual argument, one per line>
+#   DESC=<description>
+
+read_alias() {
+    local name="$1"
+    local file="${KK_ALIASES_DIR}/${name}"
+    [[ -f "$file" ]] || return 1
+    ALIAS_CMD=""
+    ALIAS_ARGS_ARRAY=()
+    ALIAS_DESC=""
+    while IFS='=' read -r key val; do
+        val="${val%$'\r'}"
+        key="${key%$'\r'}"
+        case "$key" in
+            CMD)  ALIAS_CMD="$val" ;;
+            ARG)  ALIAS_ARGS_ARRAY+=("$val") ;;
+            ARGS) # Legacy v1 format: space-separated args
+                  if [[ -n "$val" ]]; then
+                      read -ra _legacy_args <<< "$val"
+                      ALIAS_ARGS_ARRAY+=("${_legacy_args[@]}")
+                  fi ;;
+            DESC) ALIAS_DESC="$val" ;;
+        esac
+    done < "$file"
+}
+
+write_alias() {
+    local name="$1" cmd="$2" desc="$3"
+    shift 3
+    {
+        printf 'CMD=%s\n' "$cmd"
+        for arg in "$@"; do
+            printf 'ARG=%s\n' "$arg"
+        done
+        printf 'DESC=%s\n' "$desc"
+    } > "${KK_ALIASES_DIR}/${name}"
+}
+
+# --- Commands ---
+
+cmd_add() {
+    local name="${1:-}"
+    shift || true
+    local cmd="${1:-}"
+    shift || true
+
+    [[ -z "$name" ]] && die "usage: kk add <alias> <command> [args...]\n  example: kk add claude-d claude.exe --dangerously-skip-permissions"
+    [[ -z "$cmd" ]] && die "missing command. usage: kk add <alias> <command> [args...]"
+
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        die "invalid alias name '${name}'. use only: a-z, 0-9, dash, underscore"
+    fi
+    for reserved in $RESERVED_NAMES; do
+        if [[ "$name" == "$reserved" ]]; then
+            die "cannot use reserved name '${name}' as alias"
+        fi
+    done
+
+    if [[ -f "${KK_ALIASES_DIR}/${name}" ]]; then
+        warn "alias '${name}' already exists. overwriting."
+    fi
+
+    local desc=""
+    if [[ -t 0 ]]; then
+        read -r -p "description (optional, enter to skip): " desc 2>/dev/null || desc=""
+    fi
+
+    write_alias "$name" "$cmd" "$desc" "$@"
+    info "added: kk ${name} -> ${cmd} $*"
+}
+
+cmd_rm() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "usage: kk rm <alias>"
+    local file="${KK_ALIASES_DIR}/${name}"
+    [[ -f "$file" ]] || die "alias '${name}' not found"
+    rm "$file"
+    info "removed alias '${name}'"
+}
+
+cmd_list() {
+    local count=0
+    echo -e "${BOLD}KiraKota CLI aliases:${NC}"
+    echo ""
+    for f in "${KK_ALIASES_DIR}"/*; do
+        [[ -f "$f" ]] || continue
+        local name
+        name=$(basename "$f")
+        read_alias "$name"
+        local args_display="${ALIAS_ARGS_ARRAY[*]:-}"
+        printf "  ${CYAN}%-20s${NC} ${DIM}%s${NC}\n" "$name" "${ALIAS_DESC:-${ALIAS_CMD} ${args_display}}"
+        ((count++)) || true
+    done
+    if [[ $count -eq 0 ]]; then
+        echo -e "  ${DIM}(no aliases yet -- use 'kk add' to create one)${NC}"
+    fi
+    echo ""
+    echo -e "${DIM}${count} alias(es) configured${NC}"
+}
+
+cmd_help_alias() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "usage: kk help <alias>"
+    read_alias "$name" || die "alias '${name}' not found"
+    local exe
+    exe=$(normalize_path "$ALIAS_CMD")
+    info "fetching help for: ${ALIAS_CMD}"
+    echo ""
+    "$exe" --help 2>&1 || "$exe" -h 2>&1 || warn "target doesn't support --help or -h"
+}
+
+cmd_show() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "usage: kk show <alias>"
+    read_alias "$name" || die "alias '${name}' not found"
+    echo -e "${BOLD}${name}${NC}"
+    echo -e "  command: ${CYAN}${ALIAS_CMD}${NC}"
+    if [[ ${#ALIAS_ARGS_ARRAY[@]} -gt 0 ]]; then
+        echo -e "  args:"
+        for arg in "${ALIAS_ARGS_ARRAY[@]}"; do
+            echo -e "    ${arg}"
+        done
+    else
+        echo -e "  args:    ${DIM}(none)${NC}"
+    fi
+    echo -e "  desc:    ${DIM}${ALIAS_DESC:-n/a}${NC}"
+}
+
+cmd_edit() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "usage: kk edit <alias>"
+    local file="${KK_ALIASES_DIR}/${name}"
+    [[ -f "$file" ]] || die "alias '${name}' not found"
+    ${EDITOR:-vi} "$file"
+}
+
+# --- Workspace Links ---
+KK_HOME="${KK_HOME:-${HOME}/.kk}"
+KK_WORKSPACE="${KK_HOME}/workspace"
+KK_LINKS_FILE="${KK_CONFIG_DIR}/links"
+
+mkdir -p "${KK_WORKSPACE}" 2>/dev/null || true
+
+cmd_link() {
+    local source="${1:-}"
+    local name="${2:-}"
+
+    [[ -z "$source" ]] && die "usage: kk link <source-dir> [name]\n  example: kk link D:\\Projects\\MyGame my-game\n  example: kk link /d/Projects/MyGame"
+
+    source=$(normalize_path "$source")
+
+    if [[ -z "$name" ]]; then
+        name=$(basename "$source")
+    fi
+
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        die "invalid link name '${name}'. use only: a-z, 0-9, dash, underscore"
+    fi
+
+    local target="${KK_WORKSPACE}/${name}"
+
+    if [[ -e "$target" ]]; then
+        if [[ -L "$target" ]]; then
+            warn "link '${name}' already exists. replacing."
+            rm "$target"
+        else
+            die "'${name}' exists in workspace and is not a link. remove it first."
+        fi
+    fi
+
+    ln -s "$source" "$target" 2>/dev/null || {
+        local win_target
+        win_target=$(echo "$target" | sed 's|^/\([a-z]\)/|\U\1:\\|; s|/|\\|g')
+        local win_source
+        win_source=$(echo "$source" | sed 's|^/\([a-z]\)/|\U\1:\\|; s|/|\\|g')
+        cmd.exe /c "mklink /D \"$win_target\" \"$win_source\"" > /dev/null 2>&1 || \
+            die "failed to create link. try running as admin:\n  mklink /D \"$win_target\" \"$win_source\""
+    }
+
+    touch "$KK_LINKS_FILE"
+    grep -v "^${name}=" "$KK_LINKS_FILE" > "${KK_LINKS_FILE}.tmp" 2>/dev/null || true
+    echo "${name}=${source}" >> "${KK_LINKS_FILE}.tmp"
+    mv "${KK_LINKS_FILE}.tmp" "$KK_LINKS_FILE"
+
+    info "linked: ${name} -> ${source}"
+    echo -e "  ${DIM}accessible at /workspace/${name} in containers${NC}"
+}
+
+cmd_unlink() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "usage: kk unlink <name>"
+
+    local target="${KK_WORKSPACE}/${name}"
+
+    local is_registered=false
+    if [[ -f "$KK_LINKS_FILE" ]] && grep -q "^${name}=" "$KK_LINKS_FILE" 2>/dev/null; then
+        is_registered=true
+    fi
+
+    if [[ "$is_registered" == true ]] || [[ -L "$target" ]]; then
+        if [[ -d "$target" ]]; then
+            cmd.exe /c "rmdir \"$(echo "$target" | sed 's|^/\([a-z]\)/|\U\1:\\|; s|/|\\|g')\"" > /dev/null 2>&1 || rm -rf "$target" 2>/dev/null || true
+        elif [[ -L "$target" ]]; then
+            rm "$target"
+        fi
+        if [[ -f "$KK_LINKS_FILE" ]]; then
+            grep -v "^${name}=" "$KK_LINKS_FILE" > "${KK_LINKS_FILE}.tmp" 2>/dev/null || true
+            mv "${KK_LINKS_FILE}.tmp" "$KK_LINKS_FILE"
+        fi
+        info "unlinked '${name}'"
+    elif [[ -d "$target" ]]; then
+        die "'${name}' is a real directory, not a link."
+    else
+        die "link '${name}' not found in workspace"
+    fi
+}
+
+cmd_links() {
+    echo -e "${BOLD}Workspace Links${NC}"
+    echo -e "${DIM}${KK_WORKSPACE}${NC}"
+    echo ""
+
+    declare -A linked_targets
+    if [[ -f "$KK_LINKS_FILE" ]]; then
+        while IFS='=' read -r lname ltarget; do
+            [[ -n "$lname" ]] && linked_targets["$lname"]="$ltarget"
+        done < "$KK_LINKS_FILE"
+    fi
+
+    local count=0
+    for item in "${KK_WORKSPACE}"/*/; do
+        [[ -d "$item" ]] || continue
+        local name
+        name=$(basename "$item")
+
+        if [[ -n "${linked_targets[$name]:-}" ]]; then
+            printf "  ${CYAN}%-25s${NC} -> %s\n" "$name" "${linked_targets[$name]}"
+        else
+            printf "  ${CYAN}%-25s${NC} ${DIM}(local)${NC}\n" "$name"
+        fi
+        ((count++)) || true
+    done
+
+    if [[ $count -eq 0 ]]; then
+        echo -e "  ${DIM}(no projects linked)${NC}"
+        echo ""
+        echo -e "  ${DIM}Link a project:  kk link /path/to/project my-project${NC}"
+        echo -e "  ${DIM}Create new:      mkdir ${KK_WORKSPACE}/my-project${NC}"
+    fi
+    echo ""
+    echo -e "${DIM}${count} project(s) — accessible at /workspace/<name> in containers${NC}"
+}
+
+cmd_args() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "usage: kk args <alias>"
+    read_alias "$name" || die "alias '${name}' not found"
+    local exe
+    exe=$(normalize_path "$ALIAS_CMD")
+    info "discovering arguments for: ${ALIAS_CMD}"
+    echo ""
+    local output
+    output=$("$exe" --help 2>&1) || output=$("$exe" -h 2>&1) || output=$("$exe" help 2>&1) || {
+        warn "could not discover args (no --help, -h, or help)"
+        return 1
+    }
+    echo -e "${BOLD}Available options:${NC}"
+    echo "$output" | grep -E '^\s*(-|  -|--)[a-zA-Z]' | head -60
+    echo ""
+    echo -e "${DIM}(flag-like lines from --help output)${NC}"
+}
+
+cmd_run() {
+    local name="$1"
+    shift
+    read_alias "$name" || die "unknown alias '${name}'. run 'kk list' to see available aliases."
+    [[ -z "$ALIAS_CMD" ]] && die "alias '${name}' has no command (missing CMD= line)"
+    local exe
+    exe=$(normalize_path "$ALIAS_CMD")
+
+    local -a cmd_args=()
+    if [[ ${#ALIAS_ARGS_ARRAY[@]} -gt 0 ]]; then
+        cmd_args+=("${ALIAS_ARGS_ARRAY[@]}")
+    fi
+    cmd_args+=("$@")
+
+    export MSYS_NO_PATHCONV=1
+    exec "$exe" "${cmd_args[@]}"
+}
+
+cmd_version() {
+    echo "kk (KiraKota CLI) v${KK_VERSION}"
+}
+
+cmd_usage() {
+    echo -e "${BOLD}kk${NC} - KiraKota CLI v${KK_VERSION}"
+    echo ""
+    echo -e "${BOLD}ALIASES:${NC}"
+    echo "  kk <alias> [extra-args...]    Run an aliased command"
+    echo "  kk add <alias> <cmd> [args]   Add a new alias"
+    echo "  kk rm <alias>                 Remove an alias"
+    echo "  kk list                       List all aliases"
+    echo "  kk show <alias>               Show alias details"
+    echo "  kk args <alias>               Discover target's --help flags"
+    echo "  kk help <alias>               Show target's full --help"
+    echo "  kk edit <alias>               Edit alias file in \$EDITOR"
+    echo ""
+    echo -e "${BOLD}WORKSPACE:${NC}"
+    echo "  kk link <dir> [name]          Link project dir into workspace"
+    echo "  kk unlink <name>              Remove a workspace link"
+    echo "  kk links                      List workspace projects"
+    echo ""
+    echo -e "${BOLD}OTHER:${NC}"
+    echo "  kk version                    Show version"
+    echo ""
+    echo -e "${DIM}Config: ${KK_ALIASES_DIR}/${NC}"
+    echo -e "${DIM}Workspace: ${KK_WORKSPACE}/${NC}"
+}
+
+# --- Main dispatch ---
+subcmd="${1:-}"
+
+case "$subcmd" in
+    ""|--help|-h)
+        cmd_usage ;;
+    add)
+        shift; cmd_add "$@" ;;
+    rm|remove|del)
+        shift; cmd_rm "$@" ;;
+    list|ls)
+        cmd_list ;;
+    show|info)
+        shift; cmd_show "$@" ;;
+    args|flags)
+        shift; cmd_args "$@" ;;
+    help)
+        shift
+        if [[ -n "${1:-}" ]]; then
+            cmd_help_alias "$@"
+        else
+            cmd_usage
+        fi ;;
+    edit)
+        shift; cmd_edit "$@" ;;
+    link)
+        shift; cmd_link "$@" ;;
+    unlink)
+        shift; cmd_unlink "$@" ;;
+    links)
+        cmd_links ;;
+    version|--version|-v)
+        cmd_version ;;
+    *)
+        cmd_run "$subcmd" "${@:2}" ;;
+esac

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dotnet-dev
+  namespace: kk-dev
+  labels:
+    app: dotnet-dev
+    tier: dev-environment
+    lang: dotnet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dotnet-dev
+  template:
+    metadata:
+      labels:
+        app: dotnet-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: dotnet
+          image: mcr.microsoft.com/dotnet/sdk:8.0
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dotnet-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: dotnet-dev
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+    - name: https
+      port: 5001
+      targetPort: 5001

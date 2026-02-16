@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erlang-dev
+  namespace: kk-dev
+  labels:
+    app: erlang-dev
+    tier: dev-environment
+    lang: erlang
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: erlang-dev
+  template:
+    metadata:
+      labels:
+        app: erlang-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: erlang
+          image: erlang:26
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erlang-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: erlang-dev
+  ports:
+    - name: epmd
+      port: 4369
+      targetPort: 4369
+    - name: dist-start
+      port: 9100
+      targetPort: 9100
+    - name: dist-end
+      port: 9155
+      targetPort: 9155

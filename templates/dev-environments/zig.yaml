@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zig-dev
+  namespace: kk-dev
+  labels:
+    app: zig-dev
+    tier: dev-environment
+    lang: zig
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zig-dev
+  template:
+    metadata:
+      labels:
+        app: zig-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: zig
+          image: ubuntu:24.04
+          command: ["/bin/bash", "-c", "apt-get update && apt-get install -y wget xz-utils && cd /tmp && wget https://ziglang.org/download/0.12.0/zig-linux-x86_64-0.12.0.tar.xz && tar -xf zig-linux-x86_64-0.12.0.tar.xz && mv zig-linux-x86_64-0.12.0 /usr/local/zig && ln -s /usr/local/zig/zig /usr/local/bin/zig && sleep infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zig-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: zig-dev
+  ports: []

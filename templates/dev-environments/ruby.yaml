@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruby-dev
+  namespace: kk-dev
+  labels:
+    app: ruby-dev
+    tier: dev-environment
+    lang: ruby
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruby-dev
+  template:
+    metadata:
+      labels:
+        app: ruby-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: ruby
+          image: ruby:3.3-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: BUNDLE_PATH
+              value: "/workspace/.bundle"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruby-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: ruby-dev
+  ports:
+    - name: rails
+      port: 3000
+      targetPort: 3000

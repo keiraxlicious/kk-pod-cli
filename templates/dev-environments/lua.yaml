@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lua-dev
+  namespace: kk-dev
+  labels:
+    app: lua-dev
+    tier: dev-environment
+    lang: lua
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lua-dev
+  template:
+    metadata:
+      labels:
+        app: lua-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: lua
+          image: ubuntu:24.04
+          command: ["/bin/bash", "-c", "apt-get update && apt-get install -y lua5.4 luarocks && sleep infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lua-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: lua-dev
+  ports: []

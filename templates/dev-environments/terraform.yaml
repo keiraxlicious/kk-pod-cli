@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terraform-dev
+  namespace: kk-dev
+  labels:
+    app: terraform-dev
+    tier: dev-environment
+    lang: terraform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: terraform-dev
+  template:
+    metadata:
+      labels:
+        app: terraform-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: terraform
+          image: hashicorp/terraform:1.7
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: TF_CLI_ARGS
+              value: -no-color
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: terraform-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: terraform-dev
+  ports: []

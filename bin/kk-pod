@@ -1,0 +1,575 @@
+#!/usr/bin/env bash
+# kk-pod - Manage KiraKota k3s pods from Windows (via WSL2) or native Linux
+set -euo pipefail
+
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'
+YELLOW='\033[1;33m'; DIM='\033[2m'; BOLD='\033[1m'; NC='\033[0m'
+
+# Auto-detect paths from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KK_POD_ROOT="$(dirname "$SCRIPT_DIR")"
+KK_HOME="${KK_HOME:-${HOME}/.kk}"
+WORKSPACE_DIR="${KK_HOME}/workspace"
+
+info() { echo -e "${GREEN}[kk]${NC} $*"; }
+warn() { echo -e "${YELLOW}[kk]${NC} $*"; }
+die()  { echo -e "${RED}[kk]${NC} $*" >&2; exit 1; }
+
+# Detect if running in WSL vs Git Bash and adjust kubectl
+if [[ -f "/etc/rancher/k3s/k3s.yaml" ]]; then
+    export KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+    KUBECTL="k3s kubectl"
+elif command -v wsl &>/dev/null || command -v wsl.exe &>/dev/null; then
+    KUBECTL="wsl -d Ubuntu-24.04 -- k3s kubectl"
+elif command -v kubectl &>/dev/null; then
+    KUBECTL="kubectl"
+else
+    die "kubectl not found. Install k3s (WSL2) or kubectl."
+fi
+
+kubectl() { $KUBECTL "$@"; }
+
+mkdir -p "${WORKSPACE_DIR}" 2>/dev/null || true
+
+# ============================================================================
+# UTILITIES
+# ============================================================================
+
+_wsl_path() {
+    local p="$1"
+    [[ "$p" == /mnt/* ]] && echo "$p" && return
+    if [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then
+        echo "/mnt/${BASH_REMATCH[1],,}/${BASH_REMATCH[2]}"
+        return
+    fi
+    if [[ "$p" =~ ^([a-zA-Z]):[/\\](.*) ]]; then
+        local rest="${BASH_REMATCH[2]//\\//}"
+        echo "/mnt/${BASH_REMATCH[1],,}/${rest}"
+        return
+    fi
+    echo "$p"
+}
+
+_next_pod_id() {
+    local max=0
+    while IFS= read -r name; do
+        if [[ "$name" =~ ^kk-pod-([0-9]+) ]]; then
+            local n="${BASH_REMATCH[1]}"
+            (( n > max )) && max=$n
+        fi
+    done < <(kubectl get deployments -n kk-dev --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null)
+    echo $(( max + 1 ))
+}
+
+_resolve_pod() {
+    # Resolve a pod reference — accepts any of:
+    #   id#      → 1         → kk-pod-1
+    #   name     → my-env    → my-env (deployment name)
+    #   id-tag   → 5864d59975-hns6l → find pod, extract deployment
+    #   full pod → kk-pod-1-5864d59975-hns6l → extract deployment
+    # Returns: namespace|deployment-name
+    local ref="${1:-}"
+    local ctx="${2:-cmd}"
+    [[ -z "$ref" ]] && die "usage: kk ${ctx} <id#|name|id-tag>"
+
+    local deploy_name="$ref"
+
+    # Numeric ID → kk-pod-N
+    if [[ "$ref" =~ ^[0-9]+$ ]]; then
+        deploy_name="kk-pod-${ref}"
+    fi
+
+    # id-tag (looks like hash-hash, e.g. 5864d59975-hns6l)
+    if [[ "$ref" =~ ^[a-f0-9]+-[a-z0-9]+$ ]]; then
+        local found_pod=""
+        for ns in kk-dev kk-services kk-games; do
+            found_pod=$(kubectl get pods -n "$ns" --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null | grep -- "-${ref}$" | head -1)
+            if [[ -n "$found_pod" ]]; then
+                if [[ "$found_pod" =~ ^(.+)-[a-f0-9]+-[a-z0-9]+$ ]]; then
+                    deploy_name="${BASH_REMATCH[1]}"
+                fi
+                echo "${ns}|${deploy_name}"
+                return
+            fi
+        done
+        die "no pod found with id-tag '${ref}'"
+    fi
+
+    # Strip k8s pod suffix if someone passed a full pod name
+    if [[ "$deploy_name" =~ ^(.+)-[a-f0-9]+-[a-z0-9]+$ ]]; then
+        deploy_name="${BASH_REMATCH[1]}"
+    fi
+
+    # Search namespaces
+    for ns in kk-dev kk-services kk-games; do
+        if kubectl get deployment "$deploy_name" -n "$ns" &>/dev/null; then
+            echo "${ns}|${deploy_name}"
+            return
+        fi
+    done
+
+    die "pod '${ref}' not found (tried: ${deploy_name} in kk-dev, kk-services, kk-games)"
+}
+
+# ============================================================================
+# CLUSTER COMMANDS
+# ============================================================================
+
+cmd_ps() {
+    echo -e "${BOLD}Running Pods${NC}"
+    echo ""
+    local has_any=false
+    local fmt="  ${CYAN}%-4s${NC} %-20s %-18s %-10s %-8s\n"
+    printf "$fmt" "ID#" "NAME" "ID-TAG" "TYPE" "STATUS"
+    printf "$fmt" "---" "----" "------" "----" "------"
+    while IFS='|' read -r ns podname status _age; do
+        [[ "$podname" == "NAME" ]] && continue
+        [[ "$ns" != kk-* ]] && continue
+
+        local type="system"
+        case "$ns" in
+            kk-dev)      type="dev" ;;
+            kk-games)    type="game" ;;
+            kk-services) type="service" ;;
+        esac
+
+        local deploy_name="$podname"
+        local id_tag="-"
+        if [[ "$podname" =~ ^(.+)-([a-f0-9]+)-([a-z0-9]+)$ ]]; then
+            deploy_name="${BASH_REMATCH[1]}"
+            id_tag="${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+        fi
+
+        local id_num="-"
+        if [[ "$deploy_name" =~ ^kk-pod-([0-9]+)$ ]]; then
+            id_num="${BASH_REMATCH[1]}"
+        fi
+
+        printf "$fmt" "$id_num" "$deploy_name" "$id_tag" "$type" "$status"
+        has_any=true
+    done < <(kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,STATUS:.status.phase,AGE:.metadata.creationTimestamp' 2>/dev/null | sed 's/  */|/g')
+    if [[ "$has_any" == false ]]; then
+        echo -e "  ${DIM}(no kk pods running)${NC}"
+    fi
+    echo ""
+}
+
+cmd_status() {
+    echo -e "${BOLD}KiraKota Cluster Status${NC}"
+    echo ""
+    echo -e "${CYAN}Nodes:${NC}"
+    kubectl get nodes -o wide 2>/dev/null || warn "cluster not reachable"
+    echo ""
+    cmd_ps
+    echo -e "${CYAN}Workspace:${NC}"
+    echo -e "  ${DIM}${WORKSPACE_DIR}${NC}"
+    echo ""
+    echo -e "${CYAN}Resource Usage:${NC}"
+    kubectl top nodes 2>/dev/null || echo "  (metrics-server not installed)"
+}
+
+cmd_resources() {
+    echo -e "${BOLD}Resource Overview${NC}"
+    echo ""
+    kubectl top pods -A 2>/dev/null || warn "metrics-server not installed"
+}
+
+cmd_setup() {
+    local setup_script="${KK_POD_ROOT}/k3s/setup.sh"
+    [[ -f "$setup_script" ]] || die "setup script not found: ${setup_script}"
+    info "Bootstrapping k3s cluster in WSL2..."
+    if command -v wsl &>/dev/null || command -v wsl.exe &>/dev/null; then
+        wsl -d Ubuntu-24.04 -- bash "$(_wsl_path "$setup_script")"
+    else
+        bash "$setup_script"
+    fi
+}
+
+cmd_deploy() {
+    local manifest="${1:-}"
+    [[ -z "$manifest" ]] && die "usage: kk pod deploy <manifest.yaml>"
+    [[ -f "$manifest" ]] || die "file not found: $manifest"
+    info "Deploying ${manifest}..."
+    kubectl apply -f "$manifest"
+    info "Deployed."
+}
+
+# ============================================================================
+# POD COMMANDS (create, attach, map, clone, run, kill)
+# ============================================================================
+
+cmd_create() {
+    local name=""
+    local image="ubuntu:24.04"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --image)  image="$2"; shift 2 ;;
+            -*)       die "unknown flag: $1" ;;
+            *)        [[ -z "$name" ]] && name="$1" || die "unexpected arg: $1"; shift ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        local id
+        id=$(_next_pod_id)
+        name="kk-pod-${id}"
+    fi
+
+    local pod_id=""
+    if [[ "$name" =~ ^kk-pod-([0-9]+)$ ]]; then
+        pod_id="${BASH_REMATCH[1]}"
+    fi
+
+    info "Creating pod: ${name}"
+    [[ -n "$pod_id" ]] && info "  ID#:  ${pod_id}"
+    info "  Name: ${name}"
+    info "  Image: ${image}"
+
+    local ws_wsl
+    ws_wsl=$(_wsl_path "${WORKSPACE_DIR}")
+
+    kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${name}
+  namespace: kk-dev
+  labels:
+    app: ${name}
+    tier: dev
+    kk/created-by: cli
+  annotations:
+    kk/image: "${image}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${name}
+  template:
+    metadata:
+      labels:
+        app: ${name}
+        tier: dev
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: main
+          image: ${image}
+          command: ["bash", "-c"]
+          args:
+            - |
+              export PATH="\$HOME/.local/bin:\$PATH"
+              echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.bashrc 2>/dev/null || true
+              sleep infinity
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: workspace
+          hostPath:
+            path: ${ws_wsl}
+            type: DirectoryOrCreate
+EOF
+
+    info "Waiting for ${name}..."
+    kubectl wait --for=condition=Ready pod -l "app=${name}" -n kk-dev --timeout=120s >/dev/null
+    info "${name} is ready!"
+    echo ""
+    info "Attach:  kk pod attach ${pod_id:-$name}"
+    info "Map dir: kk pod map /path/to/dir ${pod_id:-$name} /mount/point"
+    info "Clone:   kk pod clone ${pod_id:-$name}"
+    info "Kill:    kk pod kill ${pod_id:-$name}"
+}
+
+cmd_map() {
+    # kk pod map <host-dir> <pod-ref> <mount-point>
+    local host_dir="${1:-}"
+    local pod_ref="${2:-}"
+    local mount_point="${3:-}"
+
+    [[ -z "$host_dir" || -z "$pod_ref" || -z "$mount_point" ]] && \
+        die "usage: kk pod map <host-dir> <pod-id#|name> <mount-point>"
+
+    local resolved ns deploy
+    resolved=$(_resolve_pod "$pod_ref" "pod map")
+    IFS='|' read -r ns deploy <<< "$resolved"
+
+    local wsl_path
+    wsl_path=$(_wsl_path "$host_dir")
+
+    local vol_idx
+    vol_idx=$(kubectl get deployment "$deploy" -n "$ns" -o jsonpath='{.spec.template.spec.volumes}' 2>/dev/null | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read())))" 2>/dev/null || echo "0")
+    local vname="mapped-${vol_idx}"
+
+    info "Mapping into ${deploy}:"
+    info "  Host:  ${host_dir} (${wsl_path})"
+    info "  Mount: ${mount_point}"
+
+    kubectl patch deployment "$deploy" -n "$ns" --type=json -p "[
+        {\"op\": \"add\", \"path\": \"/spec/template/spec/volumes/-\", \"value\": {\"name\": \"${vname}\", \"hostPath\": {\"path\": \"${wsl_path}\", \"type\": \"DirectoryOrCreate\"}}},
+        {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/volumeMounts/-\", \"value\": {\"name\": \"${vname}\", \"mountPath\": \"${mount_point}\"}}
+    ]"
+
+    info "Mapped. Pod is restarting with new mount."
+}
+
+cmd_clone() {
+    local source="${1:-}"
+    [[ -z "$source" ]] && die "usage: kk pod clone <source> [new-name]"
+
+    local new_name="${2:-}"
+    if [[ -z "$new_name" ]]; then
+        local id
+        id=$(_next_pod_id)
+        new_name="kk-pod-${id}"
+    fi
+
+    local resolved ns deploy
+    resolved=$(_resolve_pod "$source" "pod clone")
+    IFS='|' read -r ns deploy <<< "$resolved"
+
+    info "Cloning ${deploy} -> ${new_name}"
+
+    kubectl get deployment "$deploy" -n "$ns" -o json | \
+        python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for k in ['resourceVersion','uid','creationTimestamp','generation']:
+    d['metadata'].pop(k, None)
+d['metadata'].pop('annotations', None)
+d['status'] = {}
+d['metadata']['name'] = '${new_name}'
+d['metadata']['labels']['app'] = '${new_name}'
+d['spec']['selector']['matchLabels']['app'] = '${new_name}'
+d['spec']['template']['metadata']['labels']['app'] = '${new_name}'
+json.dump(d, sys.stdout)
+" | kubectl apply -f -
+
+    info "Waiting for ${new_name}..."
+    kubectl wait --for=condition=Ready pod -l "app=${new_name}" -n "$ns" --timeout=120s >/dev/null
+    info "${new_name} is ready! (cloned from ${deploy})"
+}
+
+cmd_attach() {
+    local ref="${1:-}"
+    [[ -z "$ref" ]] && die "usage: kk pod attach <id#|name>"
+    local resolved ns deploy
+    resolved=$(_resolve_pod "$ref" "pod attach")
+    IFS='|' read -r ns deploy <<< "$resolved"
+    local pod
+    pod=$(kubectl get pods -n "$ns" -l "app=${deploy}" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [[ -z "$pod" ]] && die "${deploy} is not running."
+    info "Attaching to ${deploy} (${pod})..."
+    kubectl exec -it -n "$ns" "$pod" -- /bin/bash 2>/dev/null || kubectl exec -it -n "$ns" "$pod" -- /bin/sh
+}
+
+cmd_run() {
+    local ref="${1:-}"
+    [[ -z "$ref" ]] && die "usage: kk pod run <id#|name> <command...>"
+    shift
+    [[ $# -eq 0 ]] && die "usage: kk pod run <id#|name> <command...>"
+
+    local resolved ns deploy
+    resolved=$(_resolve_pod "$ref" "pod run")
+    IFS='|' read -r ns deploy <<< "$resolved"
+
+    kubectl exec -n "$ns" "deployment/$deploy" -- "$@"
+}
+
+cmd_kill() {
+    local ref="${1:-}"
+    [[ -z "$ref" ]] && die "usage: kk pod kill <id#|name>"
+
+    local resolved ns deploy
+    resolved=$(_resolve_pod "$ref" "pod kill")
+    IFS='|' read -r ns deploy <<< "$resolved"
+
+    info "Killing ${deploy}..."
+    kubectl delete deployment "$deploy" -n "$ns" --grace-period=5
+    info "${deploy} destroyed."
+}
+
+cmd_start() {
+    local resolved ns deploy
+    resolved=$(_resolve_pod "${1:-}" "start")
+    IFS='|' read -r ns deploy <<< "$resolved"
+    info "Starting ${deploy}..."
+    kubectl scale deployment "$deploy" -n "$ns" --replicas=1
+    info "${deploy} starting."
+}
+
+cmd_stop() {
+    local resolved ns deploy
+    resolved=$(_resolve_pod "${1:-}" "stop")
+    IFS='|' read -r ns deploy <<< "$resolved"
+    info "Stopping ${deploy}..."
+    kubectl scale deployment "$deploy" -n "$ns" --replicas=0
+    info "${deploy} stopped."
+}
+
+cmd_restart() {
+    local resolved ns deploy
+    resolved=$(_resolve_pod "${1:-}" "restart")
+    IFS='|' read -r ns deploy <<< "$resolved"
+    info "Restarting ${deploy}..."
+    kubectl rollout restart deployment "$deploy" -n "$ns"
+    info "${deploy} restarting."
+}
+
+cmd_logs() {
+    local ref="${1:-}"
+    [[ -z "$ref" ]] && die "usage: kk pod logs <id#|name> [-f]"
+    local follow=""
+    [[ "${2:-}" == "-f" || "${2:-}" == "--follow" ]] && follow="-f"
+
+    local resolved ns deploy
+    resolved=$(_resolve_pod "$ref" "pod logs")
+    IFS='|' read -r ns deploy <<< "$resolved"
+    kubectl logs -n "$ns" "deployment/$deploy" --tail=100 $follow
+}
+
+# ============================================================================
+# DEV ENVIRONMENTS (template-based)
+# ============================================================================
+
+cmd_start_dev() {
+    local lang="${1:-}"
+    if [[ -z "$lang" ]]; then
+        cmd_create
+        return
+    fi
+    local template="${KK_POD_ROOT}/templates/dev-environments/${lang}.yaml"
+    [[ -f "$template" ]] || die "no template for '${lang}'. Available: $(ls "${KK_POD_ROOT}/templates/dev-environments/" 2>/dev/null | sed 's/.yaml//g' | tr '\n' ' ')"
+    info "Starting ${lang} dev environment..."
+    kubectl apply -f "$template"
+    info "${lang} dev environment deployed."
+}
+
+cmd_stop_dev() {
+    local lang="${1:-}"
+    [[ -z "$lang" ]] && die "usage: kk pod stop-dev <lang>"
+    kubectl delete -f "${KK_POD_ROOT}/templates/dev-environments/${lang}.yaml" 2>/dev/null || true
+    info "${lang} dev environment removed."
+}
+
+cmd_exec_dev() {
+    local lang="${1:-}"
+    local project="${2:-}"
+    [[ -z "$lang" ]] && die "usage: kk pod exec <lang> [project]"
+    local pod
+    pod=$(kubectl get pods -n kk-dev -l "app=${lang}-dev" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [[ -z "$pod" ]] && die "${lang} not running. Start with: kk pod start-dev ${lang}"
+    if [[ -n "$project" ]]; then
+        kubectl exec -it -n kk-dev "$pod" -- bash -c "cd /workspace/${project} && exec bash"
+    else
+        kubectl exec -it -n kk-dev "$pod" -- /bin/bash
+    fi
+}
+
+# ============================================================================
+# GAME SERVERS
+# ============================================================================
+
+cmd_start_game() {
+    local game="${1:-}"
+    [[ -z "$game" ]] && die "usage: kk pod start-game <name>"
+    info "Starting ${game} server..."
+    kubectl scale deployment "${game}-server" -n kk-games --replicas=1
+    info "${game} server starting."
+}
+
+cmd_stop_game() {
+    local game="${1:-}"
+    [[ -z "$game" ]] && die "usage: kk pod stop-game <name>"
+    info "Stopping ${game} server..."
+    kubectl scale deployment "${game}-server" -n kk-games --replicas=0
+    info "${game} server stopped."
+}
+
+# ============================================================================
+# HELP
+# ============================================================================
+
+cmd_help() {
+    echo -e "${BOLD}kk pod${NC} - KiraKota Pod Management"
+    echo ""
+    echo -e "${BOLD}CLUSTER:${NC}"
+    echo "  setup                                   Bootstrap k3s in WSL2"
+    echo "  status                                  Cluster overview"
+    echo "  ps                                      List running pods"
+    echo "  resources                               Resource usage"
+    echo "  deploy <file.yaml>                      Apply a k8s manifest"
+    echo ""
+    echo -e "${BOLD}PODS:${NC}  (use id#, name, or deployment name)"
+    echo "  create [name] [--image img]             Create blank pod"
+    echo "  attach <ref>                            Shell into pod"
+    echo "  run <ref> <cmd...>                      Exec command in pod"
+    echo "  map <host-dir> <ref> <mount>            Map host dir into pod"
+    echo "  clone <ref> [new-name]                  Clone pod with mounts"
+    echo "  start <ref>                             Scale pod up"
+    echo "  stop <ref>                              Scale pod down"
+    echo "  restart <ref>                           Rolling restart"
+    echo "  kill <ref>                              Destroy pod"
+    echo "  logs <ref> [-f]                         View pod logs"
+    echo ""
+    echo -e "${BOLD}DEV ENVIRONMENTS:${NC}"
+    echo "  start-dev [lang]                        Start env (blank if no lang)"
+    echo "  stop-dev <lang>                         Stop env"
+    echo "  exec <lang> [project]                   Shell into env"
+    echo ""
+    echo -e "${BOLD}GAMES:${NC}"
+    echo "  start-game <name>                       Start game server"
+    echo "  stop-game <name>                        Stop game server"
+    echo ""
+    echo -e "${BOLD}Pod refs:${NC} 1 (id#) | my-env (name) | kk-pod-1 (deployment)"
+    echo ""
+    # List available templates
+    if [[ -d "${KK_POD_ROOT}/templates/dev-environments" ]]; then
+        echo -e "${BOLD}Templates:${NC}"
+        echo -n "  "
+        ls "${KK_POD_ROOT}/templates/dev-environments/" 2>/dev/null | sed 's/.yaml//g' | tr '\n' ' '
+        echo ""
+    fi
+}
+
+# ============================================================================
+# ROUTING
+# ============================================================================
+
+case "${1:-}" in
+    # Cluster
+    status)      cmd_status ;;
+    ps)          cmd_ps ;;
+    setup)       cmd_setup ;;
+    deploy)      shift; cmd_deploy "$@" ;;
+    resources)   cmd_resources ;;
+    # Pods
+    create)      shift; cmd_create "$@" ;;
+    attach)      shift; cmd_attach "$@" ;;
+    run)         shift; cmd_run "$@" ;;
+    map)         shift; cmd_map "$@" ;;
+    clone)       shift; cmd_clone "$@" ;;
+    start)       shift; cmd_start "$@" ;;
+    stop)        shift; cmd_stop "$@" ;;
+    restart)     shift; cmd_restart "$@" ;;
+    kill)        shift; cmd_kill "$@" ;;
+    logs)        shift; cmd_logs "$@" ;;
+    # Dev envs
+    start-dev)   shift; cmd_start_dev "$@" ;;
+    stop-dev)    shift; cmd_stop_dev "$@" ;;
+    exec)        shift; cmd_exec_dev "$@" ;;
+    # Games
+    start-game)  shift; cmd_start_game "$@" ;;
+    stop-game)   shift; cmd_stop_game "$@" ;;
+    # Help
+    *)           cmd_help ;;
+esac

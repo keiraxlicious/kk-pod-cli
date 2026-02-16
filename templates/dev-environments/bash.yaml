@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bash-dev
+  namespace: kk-dev
+  labels:
+    app: bash-dev
+    tier: dev-environment
+    lang: bash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bash-dev
+  template:
+    metadata:
+      labels:
+        app: bash-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: bash
+          image: ubuntu:24.04
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}

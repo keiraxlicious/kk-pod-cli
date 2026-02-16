@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocaml-dev
+  namespace: kk-dev
+  labels:
+    app: ocaml-dev
+    tier: dev-environment
+    lang: ocaml
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ocaml-dev
+  template:
+    metadata:
+      labels:
+        app: ocaml-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: ocaml
+          image: ocaml/opam:ubuntu-24.04-ocaml-5.1
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: OPAMYES
+              value: "true"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ocaml-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: ocaml-dev
+  ports: []

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rust-dev
+  namespace: kk-dev
+  labels:
+    app: rust-dev
+    tier: dev-environment
+    lang: rust
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rust-dev
+  template:
+    metadata:
+      labels:
+        app: rust-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: rust
+          image: rust:1.82-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: CARGO_HOME
+              value: "/workspace/.cargo"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rust-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: rust-dev
+  ports: []

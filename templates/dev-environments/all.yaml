@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: all-dev
+  namespace: kk-dev
+  labels:
+    app: all-dev
+    tier: dev-environment
+    lang: all
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: all-dev
+  template:
+    metadata:
+      labels:
+        app: all-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: all
+          image: ubuntu:24.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              apt-get update && apt-get install -y \
+                python3 python3-pip python3-venv \
+                nodejs npm \
+                curl wget git build-essential &&
+              sleep infinity
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          ports:
+            - name: frontend
+              containerPort: 3000
+            - name: backend
+              containerPort: 5000
+            - name: http
+              containerPort: 8080
+            - name: jupyter
+              containerPort: 8888
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PIP_NO_CACHE_DIR
+              value: "1"
+            - name: NODE_ENV
+              value: development
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: all-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: all-dev
+  ports:
+    - name: frontend
+      port: 3000
+      targetPort: 3000
+    - name: backend
+      port: 5000
+      targetPort: 5000
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: jupyter
+      port: 8888
+      targetPort: 8888

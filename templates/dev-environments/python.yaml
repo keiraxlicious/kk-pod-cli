@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-dev
+  namespace: kk-dev
+  labels:
+    app: python-dev
+    tier: dev-environment
+    lang: python
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-dev
+  template:
+    metadata:
+      labels:
+        app: python-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: python
+          image: python:3.12-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PIP_NO_CACHE_DIR
+              value: "1"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: python-dev
+  ports:
+    - name: jupyter
+      port: 8888
+      targetPort: 8888
+    - name: flask
+      port: 5000
+      targetPort: 5000

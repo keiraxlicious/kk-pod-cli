@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: v-dev
+  namespace: kk-dev
+  labels:
+    app: v-dev
+    tier: dev-environment
+    lang: v
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: v-dev
+  template:
+    metadata:
+      labels:
+        app: v-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: v
+          image: ubuntu:24.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              apt-get update && apt-get install -y curl git build-essential &&
+              curl -o /tmp/v.tar.gz -L https://github.com/vlang/v/releases/download/latest/v-latest-linux64.tar.gz &&
+              cd /tmp && tar -xzf v.tar.gz && mv v /opt/v && /opt/v/v symlink &&
+              sleep infinity
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: PATH
+              value: /opt/v:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: v-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: v-dev
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

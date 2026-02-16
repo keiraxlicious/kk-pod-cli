@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+bin/kk text eol=lf
+bin/kk-pod text eol=lf

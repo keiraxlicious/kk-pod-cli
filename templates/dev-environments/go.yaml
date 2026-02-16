@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-dev
+  namespace: kk-dev
+  labels:
+    app: go-dev
+    tier: dev-environment
+    lang: go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-dev
+  template:
+    metadata:
+      labels:
+        app: go-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: go
+          image: golang:1.22-alpine
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          env:
+            - name: GOPATH
+              value: "/workspace/go"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-dev
+  namespace: kk-dev
+spec:
+  selector:
+    app: go-dev
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
