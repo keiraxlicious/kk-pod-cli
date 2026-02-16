@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caddy-dev
+  namespace: kk-dev
+  labels:
+    app: caddy-dev
+    tier: dev-environment
+    lang: caddy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: caddy-dev
+  template:
+    metadata:
+      labels:
+        app: caddy-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: caddy
+          image: caddy:alpine
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /etc/caddy
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 80
+            - containerPort: 443
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: caddy-dev
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30082
+    - name: https
+      port: 443
+      targetPort: 443
+      nodePort: 30444

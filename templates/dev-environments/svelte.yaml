@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svelte-dev
+  namespace: kk-dev
+  labels:
+    app: svelte-dev
+    tier: dev-environment
+    lang: svelte
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svelte-dev
+  template:
+    metadata:
+      labels:
+        app: svelte-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: svelte
+          image: node:22-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 5173
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "development"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svelte-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: svelte-dev
+  ports:
+    - name: vite
+      port: 5173
+      targetPort: 5173
+      nodePort: 30519
+    - name: dev-server
+      port: 3000
+      targetPort: 3000
+      nodePort: 30304

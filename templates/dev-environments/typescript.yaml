@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: typescript-dev
+  namespace: kk-dev
+  labels:
+    app: typescript-dev
+    tier: dev-environment
+    lang: typescript
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: typescript-dev
+  template:
+    metadata:
+      labels:
+        app: typescript-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: typescript
+          image: node:22-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 3000
+            - containerPort: 8080
+          env:
+            - name: NODE_ENV
+              value: "development"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: typescript-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: typescript-dev
+  ports:
+    - name: dev-server
+      port: 3000
+      targetPort: 3000
+      nodePort: 30302
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30809

@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-dev
+  namespace: kk-dev
+  labels:
+    app: flask-dev
+    tier: dev-environment
+    lang: flask
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-dev
+  template:
+    metadata:
+      labels:
+        app: flask-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: flask
+          image: python:3.12-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 5000
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: FLASK_ENV
+              value: "development"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: flask-dev
+  ports:
+    - name: dev-server
+      port: 5000
+      targetPort: 5000
+      nodePort: 30500

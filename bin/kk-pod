@@ -51,7 +51,7 @@ _wsl_path() {
 }
 
 _next_pod_id() {
-    local max=0
+    local max=-1
     while IFS= read -r name; do
         if [[ "$name" =~ ^kk-pod-([0-9]+) ]]; then
             local n="${BASH_REMATCH[1]}"

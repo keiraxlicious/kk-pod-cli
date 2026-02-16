@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: react-dev
+  namespace: kk-dev
+  labels:
+    app: react-dev
+    tier: dev-environment
+    lang: react
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: react-dev
+  template:
+    metadata:
+      labels:
+        app: react-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: react
+          image: node:22-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 3000
+            - containerPort: 5173
+          env:
+            - name: NODE_ENV
+              value: "development"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: react-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: react-dev
+  ports:
+    - name: dev-server
+      port: 3000
+      targetPort: 3000
+      nodePort: 30300
+    - name: vite
+      port: 5173
+      targetPort: 5173
+      nodePort: 30517

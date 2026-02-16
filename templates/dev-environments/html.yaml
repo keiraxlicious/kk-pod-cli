@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: html-dev
+  namespace: kk-dev
+  labels:
+    app: html-dev
+    tier: dev-environment
+    lang: html
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: html-dev
+  template:
+    metadata:
+      labels:
+        app: html-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /usr/share/nginx/html
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 80
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: html-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: html-dev
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080

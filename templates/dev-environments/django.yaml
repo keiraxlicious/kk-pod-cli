@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-dev
+  namespace: kk-dev
+  labels:
+    app: django-dev
+    tier: dev-environment
+    lang: django
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: django-dev
+  template:
+    metadata:
+      labels:
+        app: django-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: django
+          image: python:3.12-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: django-dev
+  ports:
+    - name: dev-server
+      port: 8000
+      targetPort: 8000
+      nodePort: 30800

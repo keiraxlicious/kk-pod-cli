@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: astro-dev
+  namespace: kk-dev
+  labels:
+    app: astro-dev
+    tier: dev-environment
+    lang: astro
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: astro-dev
+  template:
+    metadata:
+      labels:
+        app: astro-dev
+        tier: dev-environment
+    spec:
+      containers:
+        - name: astro
+          image: node:22-slim
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: shared-data
+              mountPath: /shared
+          ports:
+            - containerPort: 4321
+          env:
+            - name: NODE_ENV
+              value: "development"
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /tmp/kk-workspace
+            type: DirectoryOrCreate
+        - name: shared-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: astro-dev
+  namespace: kk-dev
+spec:
+  type: NodePort
+  selector:
+    app: astro-dev
+  ports:
+    - name: dev-server
+      port: 4321
+      targetPort: 4321
+      nodePort: 30432
